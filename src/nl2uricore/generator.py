@@ -22,56 +22,97 @@ def _slug(value: str) -> str:
     return value or "pack"
 
 
+def _match_prefix_keywords(prefix: str, text: str, prefix_set: set[str], *text_kw: str) -> bool:
+    return prefix in prefix_set or any(kw in text for kw in text_kw)
+
+
+def _cap(
+    prefix: str, cap_id: str, uri_tpl: str, kind: str, operation: str, *,
+    side_effects: bool, approval: str,
+) -> dict[str, Any]:
+    return {
+        "id": f"{prefix}.{cap_id}" if "." not in cap_id else cap_id,
+        "uri": uri_tpl,
+        "kind": kind,
+        "operation": operation,
+        "handler": f"markpact://self/python/{operation}",
+        "side_effects": side_effects,
+        "approval": approval,
+    }
+
+
+def _printer_caps(prefix: str, text: str) -> list[dict[str, Any]]:
+    caps = [
+        _cap(prefix, "status", f"{prefix}://{{device}}/query/status", "query", "status", side_effects=False, approval="not_required"),
+        _cap(prefix, "nozzle_check", f"{prefix}://{{device}}/command/nozzle-check", "command", "nozzle_check", side_effects=True, approval="required"),
+        _cap(prefix, "clean_head", f"{prefix}://{{device}}/command/clean-head", "command", "clean_head", side_effects=True, approval="required"),
+    ]
+    if "test" in text or "stron" in text:
+        caps.append(
+            _cap(prefix, "print_test_page", f"{prefix}://{{device}}/command/print-test-page", "command", "print_test_page", side_effects=True, approval="required")
+        )
+    return caps
+
+
+def _usb_caps(prefix: str) -> list[dict[str, Any]]:
+    return [
+        _cap(prefix, "list_ports", f"{prefix}://host/{{host}}/query/ports", "query", "list_ports", side_effects=False, approval="not_required"),
+        _cap(prefix, "port_status", f"{prefix}://port/{{port_id}}/query/status", "query", "port_status", side_effects=False, approval="not_required"),
+        _cap(prefix, "enable_port", f"{prefix}://port/{{port_id}}/command/enable", "command", "enable_port", side_effects=True, approval="required"),
+        _cap(prefix, "disable_port", f"{prefix}://port/{{port_id}}/command/disable", "command", "disable_port", side_effects=True, approval="required"),
+    ]
+
+
+def _browser_caps(prefix: str) -> list[dict[str, Any]]:
+    return [
+        _cap(prefix, "open_page", f"{prefix}://{{session}}/page/open", "command", "open_page", side_effects=True, approval="required"),
+        _cap(prefix, "get_dom", f"{prefix}://{{session}}/page/dom", "query", "get_dom", side_effects=False, approval="not_required"),
+    ]
+
+
+def _cache_caps(prefix: str) -> list[dict[str, Any]]:
+    return [
+        _cap(prefix, "status", f"{prefix}://{{name}}/query/status", "query", "status", side_effects=False, approval="not_required"),
+        _cap(prefix, "run", f"{prefix}://{{name}}/command/run", "command", "run", side_effects=True, approval="required"),
+    ]
+
+
+def _docker_caps(prefix: str) -> list[dict[str, Any]]:
+    return [
+        _cap(prefix, "status", f"{prefix}://container/{{name}}/query/status", "query", "status", side_effects=False, approval="not_required"),
+        _cap(prefix, "restart", f"{prefix}://container/{{name}}/command/restart", "command", "restart", side_effects=True, approval="required"),
+    ]
+
+
+def _generic_caps(prefix: str) -> list[dict[str, Any]]:
+    return [
+        _cap(prefix, "status", f"{prefix}://{{resource}}/query/status", "query", "status", side_effects=False, approval="not_required"),
+        _cap(prefix, "run", f"{prefix}://{{resource}}/command/run", "command", "run", side_effects=True, approval="required"),
+    ]
+
+
+_CAPABILITY_MATCHERS: list[tuple[tuple[str, ...], str | None]] = [
+    (("printer", "print", "drukuj"), "printer"),
+    (("usb", "usb"), None),
+    (("browser", "web", "przegląd"), "browser"),
+    (("cache", "cache"), "cache"),
+    (("docker", "docker", "kontener"), "docker"),
+]
+
+
 def _infer_capabilities(prefix: str, prompt: str) -> list[dict[str, Any]]:
     text = prompt.lower()
-    caps: list[dict[str, Any]] = []
-
-    def add(cap_id: str, uri: str, kind: str, operation: str, *, side_effects: bool, approval: str) -> None:
-        caps.append(
-            {
-                "id": cap_id,
-                "uri": uri,
-                "kind": kind,
-                "operation": operation,
-                "handler": f"markpact://self/python/{operation}",
-                "side_effects": side_effects,
-                "approval": approval,
-            }
-        )
-
-    if prefix in {"printer", "print"} or "druk" in text or "printer" in text:
-        add(f"{prefix}.status", f"{prefix}://{{device}}/query/status", "query", "status", side_effects=False, approval="not_required")
-        add(f"{prefix}.nozzle_check", f"{prefix}://{{device}}/command/nozzle-check", "command", "nozzle_check", side_effects=True, approval="required")
-        add(f"{prefix}.clean_head", f"{prefix}://{{device}}/command/clean-head", "command", "clean_head", side_effects=True, approval="required")
-        if "test" in text or "stron" in text:
-            add(f"{prefix}.print_test_page", f"{prefix}://{{device}}/command/print-test-page", "command", "print_test_page", side_effects=True, approval="required")
-        return caps
-
-    if prefix in {"usb"} or "usb" in text or "port" in text:
-        add(f"{prefix}.list_ports", f"{prefix}://host/{{host}}/query/ports", "query", "list_ports", side_effects=False, approval="not_required")
-        add(f"{prefix}.port_status", f"{prefix}://port/{{port_id}}/query/status", "query", "port_status", side_effects=False, approval="not_required")
-        add(f"{prefix}.enable_port", f"{prefix}://port/{{port_id}}/command/enable", "command", "enable_port", side_effects=True, approval="required")
-        add(f"{prefix}.disable_port", f"{prefix}://port/{{port_id}}/command/disable", "command", "disable_port", side_effects=True, approval="required")
-        return caps
-
-    if prefix in {"browser", "web"} or "browser" in text or "przeglad" in text:
-        add(f"{prefix}.open_page", f"{prefix}://{{session}}/page/open", "command", "open_page", side_effects=True, approval="required")
-        add(f"{prefix}.get_dom", f"{prefix}://{{session}}/page/dom", "query", "get_dom", side_effects=False, approval="not_required")
-        return caps
-
-    if prefix in {"cache"} or "cache" in text:
-        add(f"{prefix}.status", f"{prefix}://{{name}}/query/status", "query", "status", side_effects=False, approval="not_required")
-        add(f"{prefix}.run", f"{prefix}://{{name}}/command/run", "command", "run", side_effects=True, approval="required")
-        return caps
-
-    if prefix in {"docker"} or "docker" in text or "kontener" in text:
-        add(f"{prefix}.status", f"{prefix}://container/{{name}}/query/status", "query", "status", side_effects=False, approval="not_required")
-        add(f"{prefix}.restart", f"{prefix}://container/{{name}}/command/restart", "command", "restart", side_effects=True, approval="required")
-        return caps
-
-    add(f"{prefix}.status", f"{prefix}://{{resource}}/query/status", "query", "status", side_effects=False, approval="not_required")
-    add(f"{prefix}.run", f"{prefix}://{{resource}}/command/run", "command", "run", side_effects=True, approval="required")
-    return caps
+    if _match_prefix_keywords(prefix, text, {"printer", "print"}, "druk", "printer"):
+        return _printer_caps(prefix, text)
+    if _match_prefix_keywords(prefix, text, {"usb"}, "usb", "port"):
+        return _usb_caps(prefix)
+    if _match_prefix_keywords(prefix, text, {"browser", "web"}, "browser", "przeglad"):
+        return _browser_caps(prefix)
+    if _match_prefix_keywords(prefix, text, {"cache"}, "cache"):
+        return _cache_caps(prefix)
+    if _match_prefix_keywords(prefix, text, {"docker"}, "docker", "kontener"):
+        return _docker_caps(prefix)
+    return _generic_caps(prefix)
 
 
 def _handler_template(operation: str, prefix: str) -> str:
